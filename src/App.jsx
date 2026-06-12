@@ -393,20 +393,73 @@ function ConfigScreen({ onBack, onGenerate }) {
   const set = (k, v) => setCfg(p => ({ ...p, [k]: v }));
   const valid = cfg.cargo.trim().length > 3 && cfg.edital.trim().length > 10;
 
+  async function extractTextFromPDF(file) {
+    if (!window.pdfjsLib) {
+      await new Promise((resolve, reject) => {
+        const script = document.createElement("script");
+        script.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+        script.onload = resolve;
+        script.onerror = reject;
+        document.head.appendChild(script);
+      });
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+        "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+    }
+    const arrayBuffer = await file.arrayBuffer();
+    const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    let fullText = "";
+    const maxPages = Math.min(pdf.numPages, 30);
+    for (let i = 1; i <= maxPages; i++) {
+      const page = await pdf.getPage(i);
+      const content = await page.getTextContent();
+      fullText += content.items.map(item => item.str).join(" ") + "\n";
+    }
+    return fullText.slice(0, 12000);
+  }
+
   async function handlePDF(e) {
     const file = e.target.files[0];
     if (!file) return;
-    setPdfLoading(true); setPdfName(file.name);
+    setPdfLoading(true);
+    setPdfName(file.name);
     try {
-      const base64Data = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result.split(",")[1]); r.onerror = () => rej(); r.readAsDataURL(file); });
+      const texto = await extractTextFromPDF(file);
+      if (!texto || texto.trim().length < 50) {
+        alert("Nao foi possivel extrair texto deste PDF. Use um PDF com texto selecionavel.");
+        setPdfLoading(false);
+        return;
+      }
       const response = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 1500, system: "Analise o edital. Responda APENAS com JSON válido.", messages: [{ role: "user", content: [{ type: "document", source: { type: "base64", media_type: "application/pdf", data: base64Data } }, { type: "text", text: `Extraia do edital: banca, cargo principal, nível, disciplinas, qtdObjetivas, qtdDiscursivas, se tem redação (temRedacao: bool), referencia. JSON: {"banca":"","cargo":"","nivel":"Superior","edital":"disciplinas separadas por vírgula","qtdObjetivas":10,"qtdDiscursivas":0,"temRedacao":false,"referencia":""}` }] }] }),
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 1500,
+          system: "Voce e especialista em concursos publicos. Analise o edital. Responda APENAS com JSON valido, sem texto extra, sem markdown.",
+          messages: [{
+            role: "user",
+            content: "Analise este edital e extraia: banca, cargo principal, nivel (Medio/Medio-tecnico/Superior/Especialista), disciplinas da prova objetiva separadas por virgula, qtdObjetivas (numero, padrao 10), qtdDiscursivas (numero, padrao 0), temRedacao (true/false), referencia (orgao+ano).\n\nTEXTO DO EDITAL:\n" + texto + "\n\nJSON: {\"banca\":\"\",\"cargo\":\"\",\"nivel\":\"Superior\",\"edital\":\"disciplinas\",\"qtdObjetivas\":10,\"qtdDiscursivas\":0,\"temRedacao\":false,\"referencia\":\"\"}"
+          }],
+        }),
       });
       const d = await response.json();
-      const parsed = JSON.parse(d.content.map(b => b.text || "").join("").replace(/```json|```/g, "").trim());
-      setCfg(prev => ({ ...prev, ...parsed, tipoDiscursiva: parsed.temRedacao ? "redacao" : "discursiva" }));
-    } catch { alert("Erro ao ler PDF. Preencha manualmente."); }
+      const rawText = d.content.map(b => b.text || "").join("").replace(/```json|```/g, "").trim();
+      const parsed = JSON.parse(rawText);
+      setCfg(prev => ({
+        ...prev,
+        banca: parsed.banca || prev.banca,
+        cargo: parsed.cargo || prev.cargo,
+        nivel: parsed.nivel || prev.nivel,
+        edital: parsed.edital || prev.edital,
+        qtdObjetivas: parsed.qtdObjetivas || prev.qtdObjetivas,
+        qtdDiscursivas: parsed.qtdDiscursivas ?? prev.qtdDiscursivas,
+        tipoDiscursiva: parsed.temRedacao ? "redacao" : "discursiva",
+        referencia: parsed.referencia || prev.referencia,
+      }));
+    } catch (err) {
+      console.error(err);
+      alert("Erro ao processar o PDF. Verifique se nao esta protegido por senha.");
+    }
     setPdfLoading(false);
   }
 
