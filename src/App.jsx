@@ -394,6 +394,52 @@ function ConfigScreen({ onBack, onGenerate }) {
   const valid = cfg.cargo.trim().length > 3 && cfg.edital.trim().length > 10;
 
   async function handlePDF(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  setPdfLoading(true);
+  setPdfName(file.name);
+
+  try {
+    const text = await file.text();
+
+    const extrair = (inicio, fim) => {
+      const regex = new RegExp(`${inicio}[:\\s]+(.+?)(?=${fim}|$)`, "i");
+      const match = text.match(regex);
+      return match ? match[1].trim() : "";
+    };
+
+    const banca = 
+      text.match(/banca(?: organizadora)?[:\s]+([^\n]+)/i)?.[1]?.trim() || "";
+
+    const cargo =
+      text.match(/cargo[:\s]+([^\n]+)/i)?.[1]?.trim() || "";
+
+    const disciplinas = [
+      "Português",
+      "Raciocínio Lógico",
+      "Informática",
+      "Direito Constitucional",
+      "Direito Administrativo",
+      "Conhecimentos Específicos"
+    ].filter(d => text.toLowerCase().includes(d.toLowerCase()));
+
+    setCfg(prev => ({
+      ...prev,
+      banca: BANCAS.includes(banca) ? banca : prev.banca,
+      cargo: cargo || prev.cargo,
+      edital: disciplinas.length
+        ? disciplinas.join(", ")
+        : text.substring(0, 1000),
+    }));
+
+  } catch (error) {
+    console.error(error);
+    alert("Não foi possível ler o edital.");
+  }
+
+  setPdfLoading(false);
+}
     const file = e.target.files[0];
     if (!file) return;
     setPdfLoading(true); setPdfName(file.name);
