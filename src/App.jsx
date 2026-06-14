@@ -411,33 +411,45 @@ function ConfigScreen({ onBack, onGenerate }) {
   const set = (k, v) => setCfg(p => ({ ...p, [k]: v }));
   const valid = cfg.cargo.trim().length > 3 && cfg.edital.trim().length > 10;
 
-  async function extractTextFromPDF(file) {
-    return new Promise((resolve, reject) => {
-      const script = document.createElement("script");
-      script.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
-      script.onload = async () => {
-        try {
+  async function loadPdfJs() {
+    if (window.pdfjsLib) return window.pdfjsLib;
+    const PDFJS_URLS = [
+      "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js",
+      "https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.min.js",
+    ];
+    for (const url of PDFJS_URLS) {
+      try {
+        await new Promise((resolve, reject) => {
+          const s = document.createElement("script");
+          s.src = url;
+          s.onload = resolve;
+          s.onerror = reject;
+          document.head.appendChild(s);
+        });
+        if (window.pdfjsLib) {
           window.pdfjsLib.GlobalWorkerOptions.workerSrc =
-            "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
-          const arrayBuffer = await file.arrayBuffer();
-          const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-          let fullText = "";
-          const maxPages = Math.min(pdf.numPages, 25);
-          for (let i = 1; i <= maxPages; i++) {
-            const page = await pdf.getPage(i);
-            const content = await page.getTextContent();
-            fullText += content.items.map(item => item.str).join(" ") + "\n";
-          }
-          resolve(fullText.slice(0, 12000));
-        } catch (e) { reject(e); }
-      };
-      script.onerror = () => reject(new Error("Falha ao carregar PDF.js"));
-      if (window.pdfjsLib) {
-        script.onload();
-      } else {
-        document.head.appendChild(script);
-      }
-    });
+            url.replace("pdf.min.js", "pdf.worker.min.js");
+          return window.pdfjsLib;
+        }
+      } catch { continue; }
+    }
+    throw new Error("Não foi possível carregar o leitor de PDF.");
+  }
+
+  async function extractTextFromPDF(file) {
+    const pdfjs = await loadPdfJs();
+    const arrayBuffer = await file.arrayBuffer();
+    const loadingTask = pdfjs.getDocument({ data: arrayBuffer, useWorkerFetch: false, isEvalSupported: false });
+    const pdf = await loadingTask.promise;
+    let fullText = "";
+    const maxPages = Math.min(pdf.numPages, 30);
+    for (let i = 1; i <= maxPages; i++) {
+      const page = await pdf.getPage(i);
+      const content = await page.getTextContent();
+      const pageText = content.items.map(item => item.str || "").join(" ");
+      fullText += pageText + "\n";
+    }
+    return fullText.trim().slice(0, 12000);
   }
 
   async function handlePDF(e) {
