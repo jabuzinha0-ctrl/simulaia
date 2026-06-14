@@ -411,45 +411,51 @@ function ConfigScreen({ onBack, onGenerate }) {
   const set = (k, v) => setCfg(p => ({ ...p, [k]: v }));
   const valid = cfg.cargo.trim().length > 3 && cfg.edital.trim().length > 10;
 
-  async function loadPdfJs() {
-    if (window.pdfjsLib) return window.pdfjsLib;
-    const PDFJS_URLS = [
-      "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js",
-      "https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.min.js",
-    ];
-    for (const url of PDFJS_URLS) {
-      try {
-        await new Promise((resolve, reject) => {
-          const s = document.createElement("script");
-          s.src = url;
-          s.onload = resolve;
-          s.onerror = reject;
-          document.head.appendChild(s);
-        });
-        if (window.pdfjsLib) {
-          window.pdfjsLib.GlobalWorkerOptions.workerSrc =
-            url.replace("pdf.min.js", "pdf.worker.min.js");
-          return window.pdfjsLib;
-        }
-      } catch { continue; }
-    }
-    throw new Error("Não foi possível carregar o leitor de PDF.");
-  }
-
   async function extractTextFromPDF(file) {
-    const pdfjs = await loadPdfJs();
-    const arrayBuffer = await file.arrayBuffer();
-    const loadingTask = pdfjs.getDocument({ data: arrayBuffer, useWorkerFetch: false, isEvalSupported: false });
-    const pdf = await loadingTask.promise;
-    let fullText = "";
-    const maxPages = Math.min(pdf.numPages, 30);
-    for (let i = 1; i <= maxPages; i++) {
-      const page = await pdf.getPage(i);
-      const content = await page.getTextContent();
-      const pageText = content.items.map(item => item.str || "").join(" ");
-      fullText += pageText + "\n";
-    }
-    return fullText.trim().slice(0, 12000);
+    // Try reading as text first (works for some PDFs)
+    try {
+      const text = await file.text();
+      // Extract readable text from PDF binary using regex
+      const matches = text.match(/\(([^)]{3,})\)/g);
+      if (matches && matches.length > 20) {
+        const extracted = matches
+          .map(m => m.slice(1, -1))
+          .filter(s => /[a-zA-ZÀ-ú]/.test(s))
+          .join(" ");
+        if (extracted.length > 200) return extracted.slice(0, 12000);
+      }
+    } catch {}
+
+    // Fallback: use fetch to load pdfjs with no-cors
+    return new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+      script.crossOrigin = "anonymous";
+      script.onload = async () => {
+        try {
+          const lib = window.pdfjsLib;
+          lib.GlobalWorkerOptions.workerSrc = "";
+          const arrayBuffer = await file.arrayBuffer();
+          const pdf = await lib.getDocument({
+            data: arrayBuffer,
+            disableWorker: true,
+            isEvalSupported: false,
+          }).promise;
+          let fullText = "";
+          const maxPages = Math.min(pdf.numPages, 30);
+          for (let i = 1; i <= maxPages; i++) {
+            const page = await pdf.getPage(i);
+            const content = await page.getTextContent();
+            fullText += content.items.map(item => item.str || "").join(" ") + "\n";
+          }
+          const result = fullText.trim();
+          if (result.length > 100) resolve(result.slice(0, 12000));
+          else reject(new Error("Texto muito curto"));
+        } catch(e) { reject(e); }
+      };
+      script.onerror = () => reject(new Error("Falha ao carregar PDF.js"));
+      document.head.appendChild(script);
+    });
   }
 
   async function handlePDF(e) {
