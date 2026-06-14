@@ -405,9 +405,8 @@ function HomeScreen({ user, onNew, onHistory, onDetail, onLogout }) {
 function ConfigScreen({ onBack, onGenerate }) {
   const [cfg, setCfg] = useState({ banca: "CESPE/CEBRASPE", cargo: "", edital: "", nivel: "Superior", qtdObjetivas: 10, qtdDiscursivas: 0, tipoDiscursiva: "redacao", disciplinas: "", referencia: "" });
   const [pdfLoading, setPdfLoading] = useState(false);
-  const [pdfName, setPdfName] = useState("");
+  const [pdfTexto, setPdfTexto] = useState("");
   const [pdfErro, setPdfErro] = useState("");
-  const fileRef = useRef();
   const set = (k, v) => setCfg(p => ({ ...p, [k]: v }));
   const valid = cfg.cargo.trim().length > 3 && cfg.edital.trim().length > 10;
 
@@ -502,17 +501,51 @@ function ConfigScreen({ onBack, onGenerate }) {
         <h1 style={{ fontSize: 20, fontWeight: 800, margin: 0 }}>Novo Simulado</h1>
       </div>
 
-      <div style={{ background: `rgba(201,151,58,0.08)`, border: `2px dashed ${C.gold}`, borderRadius: 14, padding: "20px 16px", marginBottom: 20, textAlign: "center" }}>
-        <div style={{ fontSize: 32, marginBottom: 6 }}>📄</div>
-        <p style={{ color: C.white, fontWeight: 700, fontSize: 15, margin: "0 0 4px" }}>Envie o PDF do edital</p>
-        <p style={{ color: C.muted, fontSize: 13, margin: "0 0 12px" }}>A IA lê e preenche tudo automaticamente</p>
-        <input ref={fileRef} type="file" accept=".pdf" onChange={handlePDF} style={{ display: "none" }} />
-        <button onClick={() => { setPdfErro(""); fileRef.current.click(); }} disabled={pdfLoading}
-          style={{ background: pdfLoading ? "#1e3050" : `linear-gradient(135deg, ${C.gold}, ${C.goldLight})`, color: pdfLoading ? C.muted : C.navy, border: "none", borderRadius: 10, padding: "10px 20px", fontWeight: 700, fontSize: 14, cursor: pdfLoading ? "not-allowed" : "pointer" }}>
-          {pdfLoading ? "⏳ Lendo edital..." : "📎 Selecionar PDF"}
+      <div style={{ background: `rgba(201,151,58,0.08)`, border: `2px dashed ${C.gold}`, borderRadius: 14, padding: "20px 16px", marginBottom: 20 }}>
+        <p style={{ color: C.white, fontWeight: 700, fontSize: 15, margin: "0 0 4px", textAlign: "center" }}>📄 Usar texto do edital</p>
+        <p style={{ color: C.muted, fontSize: 13, margin: "0 0 10px", textAlign: "center" }}>Cole o texto do edital abaixo e a IA preenche tudo automaticamente</p>
+        <textarea
+          value={pdfTexto}
+          onChange={e => setPdfTexto(e.target.value)}
+          placeholder="1. Abra o PDF do edital no Chrome&#10;2. Selecione o texto com o mouse (Ctrl+A pode não funcionar)&#10;3. Copie (Ctrl+C) e cole aqui (Ctrl+V)"
+          rows={5}
+          style={{ ...inp, resize: "vertical", fontSize: 13, lineHeight: 1.6, boxSizing: "border-box", marginBottom: 10 }}
+        />
+        <button
+          onClick={async () => {
+            if (!pdfTexto.trim() || pdfTexto.trim().length < 50) { setPdfErro("Cole mais texto do edital para eu conseguir analisar."); return; }
+            setPdfLoading(true); setPdfErro("");
+            try {
+              const response = await fetch("https://api.anthropic.com/v1/messages", {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  model: "claude-sonnet-4-20250514", max_tokens: 1500,
+                  system: "Você é especialista em concursos públicos. Analise o edital. Responda APENAS com JSON válido sem texto extra.",
+                  messages: [{ role: "user", content: "Analise este edital e extraia: banca, cargo principal, nivel (Médio/Médio-técnico/Superior/Especialista), disciplinas da prova objetiva separadas por vírgula, qtdObjetivas (número inteiro, padrão 10), qtdDiscursivas (número inteiro, padrão 0), temRedacao (true/false), referencia (órgão+ano).\n\nEDITAL:\n" + pdfTexto.slice(0, 12000) + "\n\nJSON: {\"banca\":\"\",\"cargo\":\"\",\"nivel\":\"Superior\",\"edital\":\"disciplinas\",\"qtdObjetivas\":10,\"qtdDiscursivas\":0,\"temRedacao\":false,\"referencia\":\"\"}" }],
+                }),
+              });
+              const d = await response.json();
+              const parsed = JSON.parse(d.content.map(b => b.text || "").join("").replace(/```json|```/g, "").trim());
+              setCfg(prev => ({
+                ...prev,
+                banca: BANCAS.includes(parsed.banca) ? parsed.banca : prev.banca,
+                cargo: parsed.cargo || prev.cargo,
+                nivel: NIVEIS.includes(parsed.nivel) ? parsed.nivel : prev.nivel,
+                edital: parsed.edital || prev.edital,
+                qtdObjetivas: Number(parsed.qtdObjetivas) || prev.qtdObjetivas,
+                qtdDiscursivas: Number(parsed.qtdDiscursivas) || 0,
+                tipoDiscursiva: parsed.temRedacao ? "redacao" : "discursiva",
+                referencia: parsed.referencia || prev.referencia,
+              }));
+              setPdfTexto("");
+            } catch { setPdfErro("Erro ao analisar. Tente novamente."); }
+            setPdfLoading(false);
+          }}
+          disabled={pdfLoading || pdfTexto.trim().length < 50}
+          style={{ width: "100%", background: pdfLoading || pdfTexto.trim().length < 50 ? "#1e3050" : `linear-gradient(135deg, ${C.gold}, ${C.goldLight})`, color: pdfLoading || pdfTexto.trim().length < 50 ? C.muted : C.navy, border: "none", borderRadius: 10, padding: "12px", fontWeight: 700, fontSize: 14, cursor: pdfLoading || pdfTexto.trim().length < 50 ? "not-allowed" : "pointer" }}>
+          {pdfLoading ? "⏳ Analisando edital..." : "✨ Analisar e preencher automaticamente"}
         </button>
-        {pdfName && !pdfLoading && !pdfErro && <p style={{ color: C.emeraldLight, fontSize: 13, margin: "8px 0 0", fontWeight: 600 }}>✅ {pdfName} — campos preenchidos!</p>}
-        {pdfErro && <p style={{ color: C.redLight, fontSize: 13, margin: "8px 0 0" }}>⚠️ {pdfErro}</p>}
+        {pdfErro && <p style={{ color: C.redLight, fontSize: 13, margin: "8px 0 0", textAlign: "center" }}>⚠️ {pdfErro}</p>}
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
